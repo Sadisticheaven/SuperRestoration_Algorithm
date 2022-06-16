@@ -1,0 +1,225 @@
+# PyTorch
+import copy
+import math
+
+import numpy
+import torch
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+from PIL import Image, ImageChops
+
+import config
+from common import test_metrics
+from common.imresize import imresize
+
+
+def mkdirs(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+
+
+def draw_line(viz, X, Y, win, linename):
+    viz.line(Y=Y,
+             X=X,
+             win=win,
+             update='append',
+             name=linename)
+
+
+def loadIMG_crop(img_path, scale):
+    """load img and Crop to an integer multiple of scale"""
+    hrIMG = Image.open(img_path)
+    lr_wid = hrIMG.width // scale
+    lr_hei = hrIMG.height // scale
+    hr_wid = lr_wid * scale
+    hr_hei = lr_hei * scale
+    hrIMG = hrIMG.crop((0, 0, hr_wid, hr_hei))
+    return hrIMG
+
+
+def img2ycbcr(hrIMG, gray2rgb=False):
+    """if gray and not convert it to rgb, return 1 channel"""
+    if not gray2rgb and hrIMG.mode == 'L':
+        hr = np.array(hrIMG)
+        hr = hr.astype(np.float32)
+    else:
+        hrIMG.convert('RGB')
+        hr = np.array(hrIMG)  # whc -> hwc
+        hr = rgb2ycbcr(hr).astype(np.float32)
+    return hr
+
+
+def calc_psnr(img1, img2):
+    if isinstance(img1, torch.Tensor):
+        return 10. * torch.log10(1. / torch.mean((img1 - img2) ** 2))
+    else:
+        return 10. * np.log10(1. / np.mean((img1 - img2) ** 2))
+
+
+class AverageMeter(object):
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+
+def preprocess(img, device, image_mode='RGB'):
+    if image_mode == 'L':
+        y = img.astype(np.float32)  # (width, height, channel) -> (height, width, channel)
+        y /= 255.
+        y = torch.from_numpy(y).to(device)  # numpy -> cpu tensor -> GPU tensor
+        y = y.unsqueeze(0).unsqueeze(0)  # input Tensor Dimension: batch_size * channel * H * W
+        return y, y
+    else:
+        img = np.array(img).astype(np.float32)  # (width, height, channel) -> (height, width, channel)
+        ycbcr = rgb2ycbcr(img).astype(np.float32).transpose([2, 0, 1])
+        ycbcr /= 255.
+        ycbcr = torch.from_numpy(ycbcr).to(device).unsqueeze(0)  # numpy -> cpu tensor -> GPU tensor
+        y = ycbcr[0, 0, ...].unsqueeze(0).unsqueeze(0)  # input Tensor Dimension: batch_size * channel * H * W
+        return y, ycbcr
+
+
+# helper function for visualizing the output of a given layer
+# default number of filters is 4
+def viz_layer(layer, n_filters=4):
+    plt.figure(figsize=(4, 3.5))
+    min = torch.min(layer).item()
+    max = torch.max(layer).item()
+    # mean = torch.mean(layer).item()
+    # std = torch.std(layer).item()
+    # transforms1 = transforms.Normalize(mean=mean, std=std)
+    for index, filter in enumerate(layer):
+        plt.subplots_adjust(wspace=0.05, hspace=0.05)
+        plt.subplot(8, 8, index + 1)
+        # min = torch.min(filter).item()
+        # max = torch.max(filter).item()
+        filter = (filter - min) / (max - min)
+        # plt.imshow(transforms1(filter.detach())[0, :, :],  cmap='gray')
+        plt.imshow(filter[0, :, :].detach(), cmap='gray')
+        plt.axis('off')
+    plt.show()
+
+
+def viz_layer2(layer, n_filters=4):
+    plt.figure(figsize=(4, 3.5))
+    layer = torch.from_numpy(layer)
+    min = torch.min(layer).item()
+    max = torch.max(layer).item()
+    # mean = torch.mean(layer).item()
+    # std = torch.std(layer).item()
+    # transforms1 = transforms.Normalize(mean=mean, std=std)
+    for index in range(n_filters):
+        filter = layer[:, :, index]
+        plt.subplots_adjust(wspace=0.05, hspace=0.05)
+        plt.subplot(8, 8, index + 1)
+        # filter = (filter - min)/(max - min)
+        # plt.imshow(transforms1(filter.detach())[0, :, :],  cmap='gray')
+        plt.imshow(filter[:, :].detach(), cmap='gray')
+        plt.axis('off')
+    plt.show()
+
+
+def rgb2ycbcr(rgb):
+    m = np.array([[65.481, 128.553, 24.966],
+                  [-37.797, -74.203, 112.0],
+                  [112.0, -93.786, -18.214]])
+    shape = rgb.shape
+    if len(shape) == 3:
+        rgb = rgb.reshape((shape[0] * shape[1], 3))
+    ycbcr = np.dot(rgb, m.transpose() / 255.)
+    ycbcr[:, 0] += 16.
+    ycbcr[:, 1:] += 128.
+    ycbcr = np.round(ycbcr)
+    return ycbcr.reshape(shape)
+
+
+# ITU-R BT.601
+# https://en.wikipedia.org/wiki/YCbCr
+# YUV -> RGB
+def ycbcr2rgb(ycbcr):
+    m = np.array([[65.481, 128.553, 24.966],
+                  [-37.797, -74.203, 112],
+                  [112, -93.786, -18.214]])
+    shape = ycbcr.shape
+    if len(shape) == 3:
+        ycbcr = ycbcr.reshape((shape[0] * shape[1], 3))
+    rgb = copy.deepcopy(ycbcr)
+    rgb[:, 0] -= 16.
+    rgb[:, 1:] -= 128.
+    rgb = np.dot(rgb, np.linalg.inv(m.transpose()) * 255.)
+    rgb = np.round(rgb)
+    return rgb.clip(0, 255).reshape(shape)
+
+
+# 平移
+def ImgOffSet(Img, xoff, yoff):
+    width, height = Img.size
+    c = ImageChops.offset(Img, xoff, yoff)
+    c.paste((0, 0, 0), (0, 0, xoff, height))
+    c.paste((0, 0, 0), (0, 0, width, yoff))
+    return c
+
+
+def calc_metrics_of_model_on_datasets(metrics, model_name, scale, sr_dir, datasets_name, datasets_path):
+    if metrics:
+        for idx, img_dir in enumerate(datasets_path):
+            dataset = datasets_name[idx]
+            outputs_dir = sr_dir + dataset + '/'
+            test_metrics.test_metrics(model_name, dataset, scale, crop=scale, sr_path=outputs_dir, gt_path=img_dir,
+                                      save_path=config.save_path_root, metrics_to_calc=metrics)
+
+
+def shrink_lr(lr, max_size=512):
+    width = lr.shape[1]
+    height = lr.shape[0]
+    if width * height > max_size * max_size:
+        return imresize(lr, max_size / max(width, height), 'bicubic')
+    return lr
+
+
+def divide_lr(lr, max_size=512):
+    sub_imgs = []
+    width = lr.shape[1]
+    height = lr.shape[0]
+    x_num = 1
+    if width * height > max_size * max_size:
+        x_num = math.ceil(width / max_size)
+        for r in range(0, height, max_size):  # hr.height
+            for c in range(0, width, max_size):  # hr.width
+                sub_imgs.append(lr[r: r + max_size, c: c + max_size])
+    else:
+        sub_imgs.append(lr)
+    return sub_imgs, x_num
+
+
+def catch_sub_imgs(sub_imgs, x_num, sr_shape):
+    row = 0
+    col = 0
+    sr = numpy.zeros(sr_shape)
+    for idx, sub_img in enumerate(sub_imgs):
+        sub_wid = sub_img.shape[1]
+        sub_hgt = sub_img.shape[0]
+        sr[row:row + sub_hgt, col: col + sub_wid, ...] = sub_img
+        if (idx + 1) % x_num == 0:
+            row += sub_hgt
+            col = 0
+        else:
+            col += sub_wid
+    return sr
+
+
+if __name__ == '__main__':
+    pass
+
+
