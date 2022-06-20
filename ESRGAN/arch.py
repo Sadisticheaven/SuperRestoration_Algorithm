@@ -5,6 +5,23 @@ from torch.nn import functional as F
 padding_mode = 'zeros'
 
 
+def pixel_unshuffle(x, scale):
+    """ Pixel unshuffle.
+    Args:
+        x (Tensor): Input feature with shape (b, c, hh, hw).
+        scale (int): Downsample ratio.
+    Returns:
+        Tensor: the pixel unshuffled feature.
+    """
+    b, c, hh, hw = x.size()
+    out_channel = c * (scale**2)
+    assert hh % scale == 0 and hw % scale == 0
+    h = hh // scale
+    w = hw // scale
+    x_view = x.view(b, c, h, scale, w, scale)
+    return x_view.permute(0, 1, 3, 5, 2, 4).reshape(b, out_channel, h, w)
+
+
 class ResidualBlock(nn.Module):
     def __init__(self):
         super(ResidualBlock, self).__init__()
@@ -63,21 +80,26 @@ class _RRDB(nn.Module):
 
 
 class EsrganGenerator(nn.Module):
-    def __init__(self):
+    def __init__(self, sf=4, num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_growth=32):
         super(EsrganGenerator, self).__init__()
-        self.conv_first = nn.Conv2d(3, 64, kernel_size=3, padding=1, padding_mode=padding_mode)
-        self.body = self.make_layer(_RRDB, 23)
-        self.conv_body = nn.Conv2d(64, 64, kernel_size=3, padding=1, padding_mode=padding_mode)
-        self.conv_up1 = nn.Conv2d(64, 64, kernel_size=3, padding=1, padding_mode=padding_mode)
-        self.conv_up2 = nn.Conv2d(64, 64, kernel_size=3, padding=1, padding_mode=padding_mode)
-        self.conv_hr = nn.Conv2d(64, 64, kernel_size=3, padding=1, padding_mode=padding_mode)
-        self.conv_last = nn.Conv2d(64, 3, kernel_size=3, padding=1, padding_mode=padding_mode)
+        self.scale = sf
+        if sf == 2:
+            num_in_ch = num_in_ch * 4
+        elif sf == 1:
+            num_in_ch = num_in_ch * 16
+        self.conv_first = nn.Conv2d(num_in_ch, num_feat, kernel_size=3, padding=1, padding_mode=padding_mode)
+        self.body = self.make_layer(_RRDB, num_block, num_feat=num_feat, num_growth=num_growth)
+        self.conv_body = nn.Conv2d(num_feat, num_feat, kernel_size=3, padding=1, padding_mode=padding_mode)
+        self.conv_up1 = nn.Conv2d(num_feat, num_feat, kernel_size=3, padding=1, padding_mode=padding_mode)
+        self.conv_up2 = nn.Conv2d(num_feat, num_feat, kernel_size=3, padding=1, padding_mode=padding_mode)
+        self.conv_hr = nn.Conv2d(num_feat, num_feat, kernel_size=3, padding=1, padding_mode=padding_mode)
+        self.conv_last = nn.Conv2d(num_feat, num_out_ch, kernel_size=3, padding=1, padding_mode=padding_mode)
         self.lrelu = nn.LeakyReLU(0.2, True)
 
-    def make_layer(self, block, num_of_layer):
+    def make_layer(self, block, num_of_layer, **kwarg):
         layers = []
         for _ in range(num_of_layer):
-            layers.append(block())
+            layers.append(block(**kwarg))
         return nn.Sequential(*layers)
 
     def init_weight(self):
@@ -88,6 +110,11 @@ class EsrganGenerator(nn.Module):
                 L.bias.data.fill_(0)
 
     def forward(self, x):
+        if self.scale == 2:
+            x = pixel_unshuffle(x, scale=2)
+        elif self.scale == 1:
+            x = pixel_unshuffle(x, scale=4)
+
         x = self.conv_first(x)
         identity = x
         x = self.body(x)

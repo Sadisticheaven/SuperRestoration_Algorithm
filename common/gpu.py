@@ -6,7 +6,7 @@ import time
 import psutil
 from pathlib import Path
 
-project_rootdir = 'F:/py27Proj/'
+project_rootdir = 'D:/Document/PycharmProj/'
 lock_file = project_rootdir + 'SuperRestoration_Algorithm/lock.txt'
 
 

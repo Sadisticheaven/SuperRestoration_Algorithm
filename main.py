@@ -1,8 +1,5 @@
 import argparse
 import config
-import SRCNN.test
-import ESRGAN.test
-import UnAI.interplot
 from common.gpu import Monitor, proc_exist, lock, unlock
 
 
@@ -14,17 +11,27 @@ def run_model_on_datasets(model_idx):
     # monitor.stop()
     model_name = config.models_name[model_idx]
     if model_name == 'SRCNN':
-        run = SRCNN.test.run
-    elif model_name == 'ESRGAN':
-        run = ESRGAN.test.run
-    elif model_name == 'RealESRGAN':
-        run = ESRGAN.test.run
+        import SRCNN.test as test
+    elif model_name == 'FSRCNN':
+        import FSRCNN.test as test
+    elif model_name == 'SRGAN':
+        import SRGAN.test as test
+    elif model_name == 'BSRGAN':
+        import BSRGAN.test as test
+    elif model_name.find('ESRGAN') > -1:
+        import ESRGAN.test as test
+    elif model_name == 'HCFlow':
+        import HCFlow.test as test
+    elif model_name == 'SRFlow':
+        import SRFlow.test as test
+    elif model_name.find('SwinIR') > -1:
+        import SwinIR.test as test
     elif model_name == 'bicubic':
-        run = UnAI.interplot.run
+        import UnAI.interplot as test
     else:
         print(f'算法{model_name}不存在！')
         return 1
-    run(model_idx)
+    test.run(model_idx)
 
 
 if __name__ == '__main__':
@@ -32,13 +39,13 @@ if __name__ == '__main__':
     parser.add_argument("--save_path_root", type=str, default="./save_path/", help="运行结果的保存根路径。")
     # parser.add_argument("--gpus", nargs='+', type=str, help="使用的gpu列表")
     parser.add_argument("--models_name", nargs='+', type=str, default=[
-        "SRCNN",
-        # "RealESRGAN"
+        # "SRCNN",
+        "HCFlow"
     ], help="算法的名称列表。")
     parser.add_argument("--models_scale", nargs='+', type=str, default=["4", "4"], help="算法的放大倍率列表。")
     parser.add_argument("--models_param", nargs='+', type=str, help="算法的参数路径列表。", default=[
-        "F:/Document/py27Proj/SuperRestoration/SRCNN/weight_file/SRCNN_x4_lr=e-1_batch=512/x4/best.pth",
-        # "F:/Document/py27Proj/SuperRestoration/weight_file/RealESRGAN_x4plus.pth"
+        # "./SRWeightFiles/SRCNNx4.pth",
+        "./SRWeightFiles/SR_DF2K_X4_HCFlow++.pth"
     ])
     parser.add_argument("--datasets_name", nargs='+', type=str, default=[
         # "Set5", "Set14"
@@ -47,9 +54,10 @@ if __name__ == '__main__':
         # "F:/Document/py27Proj/SuperRestoration/datasets/Set5/",
         # "F:/Document/py27Proj/SuperRestoration/datasets/Set14/"
     ])
-    parser.add_argument("--real_datasets_name", nargs='+', type=str, default=["2022-03-24_17-45-04"], help="真实数据集名称列表。")
+    parser.add_argument("--real_datasets_name", nargs='+', type=str, default=["2022-06-20_17-14-37"], help="真实数据集名称列表。")
     parser.add_argument("--real_datasets_path", nargs='+', type=str, help="真实数据集路径列表。", default=[
-        "F:/Document/user_data/root/realImage/2022-03-24_17-45-04/",
+        # "F:/Document/user_data/root/realImage/2022-03-24_17-45-04/",
+        "D:/Document/user_data/root/realImage/2022-06-20_17-14-37/",
     ])
     # parser.add_argument("--real_datasets_name", nargs='+', type=str, default=[], help="真实数据集名称列表。")
     # parser.add_argument("--real_datasets_path", nargs='+', type=str, help="真实数据集路径列表。", default=[])
